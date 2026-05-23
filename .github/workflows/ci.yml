@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typecheck-backend:
+    name: Backend typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: cd backend && npm ci
+      - run: cd backend && npm run typecheck
+      - run: cd backend && npm test
+
+  typecheck-frontend:
+    name: Frontend typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: cd frontend && npm ci
+      - run: cd frontend && npm run typecheck
+
+  build-backend:
+    name: Build backend
+    needs: typecheck-backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: cd backend && npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-dist
+          path: backend/dist/
+          retention-days: 1
+
+  build-frontend:
+    name: Build frontend
+    needs: typecheck-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - run: cd frontend && npm ci && npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 1
+
+  docker-build:
+    name: Docker build check
+    needs: [build-backend, build-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t vega-backend:ci ./backend
+      - name: Build frontend image
+        run: docker build -t vega-frontend:ci ./frontend
+      - name: Smoke test backend image
+        run: |
+          docker run -d --name vega-test \
+            -e ANTHROPIC_API_KEY=test \
+            -e TRADING_API_BASE_URL=http://localhost:8000 \
+            -e TRADING_API_TOKEN=test \
+            -e NODE_ENV=development \
+            -p 3001:3001 \
+            vega-backend:ci
+          sleep 5
+          curl -f http://localhost:3001/api/ai/health || true
+          docker stop vega-test

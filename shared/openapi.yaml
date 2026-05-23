@@ -1,0 +1,450 @@
+openapi: 3.0.3
+info:
+  title: VEGA AI Trading Assistant API
+  description: Voice-Enabled Guidance Agent — AI assistant for intelligent trading oversight
+  version: 1.0.0
+  contact:
+    name: VEGA API
+servers:
+  - url: /api/ai
+    description: VEGA backend API
+
+tags:
+  - name: health
+    description: Service health and status
+  - name: context
+    description: Trading context and market data
+  - name: chat
+    description: AI conversation interface
+  - name: command
+    description: Trading command execution
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Health check
+      description: Returns the health status of VEGA and its dependencies
+      operationId: getHealth
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /context:
+    get:
+      tags: [context]
+      summary: Get trading context
+      description: Returns current trading context including watchlist, predictions, orders, and status
+      operationId: getContext
+      responses:
+        '200':
+          description: Current trading context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradingContext'
+        '503':
+          description: Trading API unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /chat:
+    post:
+      tags: [chat]
+      summary: Send a chat message to VEGA
+      description: Send a natural language message and receive an AI-powered response with trading context awareness
+      operationId: chat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+            examples:
+              simple_question:
+                summary: Ask about watchlist
+                value:
+                  message: "What stocks are we watching right now?"
+                  sessionId: "session-abc123"
+              command_intent:
+                summary: Request a command
+                value:
+                  message: "Please pause all trading immediately"
+                  sessionId: "session-abc123"
+      responses:
+        '200':
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: AI service error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /command:
+    post:
+      tags: [command]
+      summary: Execute a trading command
+      description: Execute a specific trading command. Requires appropriate mode and explicit approval for risky actions.
+      operationId: executeCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandRequest'
+            examples:
+              emergency_stop:
+                summary: Emergency stop all trading
+                value:
+                  command: "emergency_stop"
+                  sessionId: "session-abc123"
+                  approved: true
+              add_symbol:
+                summary: Add a symbol to watchlist
+                value:
+                  command: "add_symbol"
+                  params:
+                    symbol: "AAPL"
+                  sessionId: "session-abc123"
+                  approved: true
+      responses:
+        '200':
+          description: Command result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResponse'
+        '400':
+          description: Invalid command or missing approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Command not allowed in current mode
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    AssistantMode:
+      type: string
+      enum: [readonly, approval_required, autonomous]
+      description: Operating mode of the VEGA assistant
+
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: User's message to VEGA
+        sessionId:
+          type: string
+          description: Session ID for conversation continuity (generated if not provided)
+        mode:
+          $ref: '#/components/schemas/AssistantMode'
+
+    ChatResponse:
+      type: object
+      required: [message, sessionId, timestamp]
+      properties:
+        message:
+          type: string
+          description: VEGA's response
+        sessionId:
+          type: string
+          description: Session ID (use in subsequent requests to maintain context)
+        timestamp:
+          type: string
+          format: date-time
+        suggestions:
+          type: array
+          items:
+            type: string
+          maxItems: 3
+          description: Suggested follow-up questions
+        requiresApproval:
+          type: boolean
+          description: True if the response includes a pending action requiring user approval
+        pendingAction:
+          $ref: '#/components/schemas/TradingCommand'
+
+    CommandRequest:
+      type: object
+      required: [command, sessionId]
+      properties:
+        command:
+          $ref: '#/components/schemas/CommandType'
+        params:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: string
+              - type: number
+              - type: boolean
+          description: Command-specific parameters
+        sessionId:
+          type: string
+        approved:
+          type: boolean
+          description: Explicit approval for commands that modify trading state
+
+    CommandResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+        result:
+          description: Command execution result data
+        message:
+          type: string
+        requiresApproval:
+          type: boolean
+        commandId:
+          type: string
+          description: Audit log entry ID
+
+    CommandType:
+      type: string
+      enum:
+        - pause_trading
+        - resume_trading
+        - add_symbol
+        - remove_symbol
+        - refresh_predictions
+        - start_training
+        - stop_training
+        - show_alpaca_status
+        - show_training_progress
+        - emergency_stop
+        - get_watchlist
+        - get_predictions
+        - get_orders
+        - get_open_orders
+        - get_risks
+        - get_status
+
+    TradingCommand:
+      type: object
+      required: [type, requiresApproval, riskLevel, description]
+      properties:
+        type:
+          $ref: '#/components/schemas/CommandType'
+        params:
+          type: object
+          additionalProperties: true
+        requiresApproval:
+          type: boolean
+        riskLevel:
+          type: string
+          enum: [low, medium, high, critical]
+        description:
+          type: string
+
+    TradingContext:
+      type: object
+      required: [watchlist, predictions, recentOrders, openOrders, tradingStatus, alpacaStatus, trainingStatus, lastUpdated]
+      properties:
+        watchlist:
+          type: array
+          items:
+            type: string
+        predictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Prediction'
+        recentOrders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        openOrders:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        tradingStatus:
+          $ref: '#/components/schemas/TradingStatus'
+        alpacaStatus:
+          $ref: '#/components/schemas/AlpacaStatus'
+        trainingStatus:
+          $ref: '#/components/schemas/TrainingStatus'
+        lastUpdated:
+          type: string
+          format: date-time
+
+    Prediction:
+      type: object
+      required: [symbol, signal, confidence, price, timestamp]
+      properties:
+        symbol:
+          type: string
+        signal:
+          type: string
+          enum: [buy, sell, hold]
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        price:
+          type: number
+        reasoning:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required: [id, symbol, side, qty, status, createdAt]
+      properties:
+        id:
+          type: string
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [buy, sell]
+        qty:
+          type: number
+        price:
+          type: number
+        status:
+          type: string
+        filledAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    TradingStatus:
+      type: object
+      properties:
+        isPaused:
+          type: boolean
+        isAutoTradingEnabled:
+          type: boolean
+        isOptionsEnabled:
+          type: boolean
+        activePositions:
+          type: integer
+        totalPnl:
+          type: number
+        lastTradeAt:
+          type: string
+          format: date-time
+
+    AlpacaStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        accountStatus:
+          type: string
+        buyingPower:
+          type: number
+        portfolioValue:
+          type: number
+        dayTradeCount:
+          type: integer
+
+    TrainingStatus:
+      type: object
+      properties:
+        isRunning:
+          type: boolean
+        progress:
+          type: number
+          minimum: 0
+          maximum: 100
+        currentEpoch:
+          type: integer
+        totalEpochs:
+          type: integer
+        loss:
+          type: number
+        accuracy:
+          type: number
+        startedAt:
+          type: string
+          format: date-time
+        estimatedCompletion:
+          type: string
+          format: date-time
+
+    HealthResponse:
+      type: object
+      required: [status, version, assistantName, mode, uptime, services, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        version:
+          type: string
+        assistantName:
+          type: string
+        mode:
+          $ref: '#/components/schemas/AssistantMode'
+        uptime:
+          type: number
+          description: Process uptime in seconds
+        services:
+          type: object
+          properties:
+            anthropic:
+              type: string
+              enum: [connected, error]
+            tradingApi:
+              type: string
+              enum: [connected, error, unknown]
+            auditDb:
+              type: string
+              enum: [connected, error]
+        timestamp:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
