@@ -4,11 +4,17 @@ import { config } from '../config';
 import logger from '../logger';
 import { logEvent } from './audit';
 import { tradingClient } from './trading-client';
+import { CostGovernor } from './costGovernor';
+import { LocalResponder } from './localResponder';
 import type { OperationalContextStore, Task, Incident, Workflow } from './operationalContext';
 import type { VegaSSMClient } from './ssmClient';
 import type {
   ChatMessage, ChatResponse, AssistantMode, TradingContext,
 } from '../types';
+
+// ─── System prompt version ─────────────────────────────────────────────────────
+// Bump this when BASE_SYSTEM_PROMPT or TOOLS change to invalidate the cache.
+const SYSTEM_PROMPT_VERSION = 'v3';
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
@@ -162,6 +168,19 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// Build tool list with cache_control on the last item (Anthropic's caching rule)
+function buildCacheableTools(): Anthropic.Tool[] {
+  const tools = [...TOOLS];
+  if (tools.length === 0) return tools;
+  // Mark the last tool with cache_control so the entire tool block is cached
+  const lastTool = { ...tools[tools.length - 1] } as unknown as Record<string, unknown>;
+  lastTool['cache_control'] = { type: 'ephemeral' };
+  tools[tools.length - 1] = lastTool as unknown as Anthropic.Tool;
+  return tools;
+}
+
+const CACHEABLE_TOOLS = buildCacheableTools();
+
 // ─── System prompt ────────────────────────────────────────────────────────────
 
 const BASE_SYSTEM_PROMPT = `You are VEGA (Voice-Enabled Guidance Agent), the autonomous engineering manager and AI brain of the AlphaBot quantitative trading platform. You are not a passive chatbot — you are an active operational agent with real tools to inspect and control the system.
@@ -263,15 +282,68 @@ export class VegaAI {
   private conversationHistory: Map<string, ChatMessage[]> = new Map();
   private readonly MAX_HISTORY = 20;
   private readonly MAX_ITERATIONS = 10;
+  private readonly costGovernor: CostGovernor;
+  private readonly localResponder: LocalResponder;
 
   constructor(
     private readonly opCtx: OperationalContextStore,
     private readonly ssmClient: VegaSSMClient,
+    costGovernor: CostGovernor,
   ) {
     this.client = new Anthropic({ apiKey: config.anthropicApiKey });
+    this.costGovernor = costGovernor;
+    this.localResponder = new LocalResponder();
   }
 
   async chat(message: string, sessionId: string, mode: AssistantMode): Promise<ChatResponse> {
+    const governor = this.costGovernor;
+
+    // ── 1. Budget / rate check ───────────────────────────────────────────────
+    const budgetCheck = governor.canCall('chat');
+    if (!budgetCheck.allowed) {
+      // Try local responder first for simple queries
+      let ctx: TradingContext | null = null;
+      try { ctx = await tradingClient.getContext(); } catch { /* ignore */ }
+
+      const localResp = this.localResponder.getSimpleResponse(message, ctx);
+      if (localResp) {
+        governor.recordUsage({
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-6',
+          endpoint: 'chat',
+          session_id: sessionId,
+          reason: 'local-simple-budget-blocked',
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          total_tokens: 0,
+          estimated_cost_usd: 0,
+          cache_hit: true,
+          blocked_by_budget: true,
+        });
+        return { message: localResp, sessionId, timestamp: new Date().toISOString(), suggestions: [] };
+      }
+
+      const fallback = this.localResponder.getBudgetExceededResponse(governor.getStatusMessage());
+      governor.recordUsage({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        endpoint: 'chat',
+        session_id: sessionId,
+        reason: 'budget-exceeded-fallback',
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        total_tokens: 0,
+        estimated_cost_usd: 0,
+        cache_hit: false,
+        blocked_by_budget: true,
+      });
+      return { message: fallback, sessionId, timestamp: new Date().toISOString(), suggestions: [] };
+    }
+
     const history = this.getHistory(sessionId);
     const userMsg: ChatMessage = {
       id: uuidv4(),
@@ -281,7 +353,7 @@ export class VegaAI {
     };
     history.push(userMsg);
 
-    // Fetch a fresh context snapshot for the system prompt
+    // ── 2. Prefetch context ──────────────────────────────────────────────────
     let cachedContext: TradingContext | undefined;
     try {
       cachedContext = await tradingClient.getContext();
@@ -289,35 +361,135 @@ export class VegaAI {
       logger.warn('Failed to prefetch trading context for system prompt');
     }
 
+    // ── 3. Try local responder for simple queries ────────────────────────────
+    if (this.localResponder.classify(message) === 'simple') {
+      const localResp = this.localResponder.getSimpleResponse(message, cachedContext ?? null);
+      if (localResp) {
+        governor.recordUsage({
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-6',
+          endpoint: 'chat',
+          session_id: sessionId,
+          reason: 'local-simple',
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          cache_read_tokens: 0,
+          cache_write_tokens: 0,
+          total_tokens: 0,
+          estimated_cost_usd: 0,
+          cache_hit: true,
+          blocked_by_budget: false,
+        });
+        const assistantMsg: ChatMessage = {
+          id: uuidv4(), role: 'assistant', content: localResp,
+          timestamp: new Date().toISOString(),
+        };
+        history.push(assistantMsg);
+        this.trimHistory(sessionId, history);
+        return { message: localResp, sessionId, timestamp: new Date().toISOString(), suggestions: [] };
+      }
+    }
+
     const systemPrompt = buildSystemPrompt(mode, cachedContext);
 
-    // Build the messages array for the Anthropic API
+    // ── 4. Check response cache ──────────────────────────────────────────────
     const apiMessages: Anthropic.MessageParam[] = history.map(m => ({
       role: m.role,
       content: m.content,
     }));
+    const ctxHash = JSON.stringify(cachedContext ?? {}).slice(0, 200);
+    const promptHash = governor.hashPrompt(SYSTEM_PROMPT_VERSION, apiMessages, ctxHash);
+    const cached = governor.getCachedResponse(promptHash);
+    if (cached) {
+      const assistantMsg: ChatMessage = {
+        id: uuidv4(), role: 'assistant', content: cached,
+        timestamp: new Date().toISOString(),
+      };
+      history.push(assistantMsg);
+      this.trimHistory(sessionId, history);
+      return { message: cached, sessionId, timestamp: new Date().toISOString(), suggestions: this.extractSuggestions(cached, cachedContext) };
+    }
 
+    // ── 5. Agentic loop with prompt caching ──────────────────────────────────
     let finalText = '';
+    // Accumulate tokens across iterations
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCacheWriteTokens = 0;
+    let totalTokensUsed = 0;
+
+    const maxOutputTokens = Math.min(
+      parseInt(process.env.CLAUDE_MAX_OUTPUT_TOKENS ?? '800', 10),
+      4096,
+    );
+    const maxTotalTokens = parseInt(process.env.CLAUDE_MAX_TOKENS_PER_REQUEST ?? '4000', 10);
 
     try {
       let iterations = 0;
 
       while (iterations < this.MAX_ITERATIONS) {
+        // Abort early if we've already used too many tokens
+        if (totalTokensUsed > maxTotalTokens) {
+          logger.warn('Max tokens per request reached, aborting agentic loop', {
+            totalTokensUsed,
+            maxTotalTokens,
+            sessionId,
+          });
+          if (!finalText) {
+            finalText = 'I reached the token limit for this request. Please try a more specific question.';
+          }
+          break;
+        }
+
         iterations++;
+
+        // Use cache_control on the system prompt to cache the static 5,500-token block
+        const systemBlock = [
+          {
+            type: 'text' as const,
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ];
 
         const response = await this.client.messages.create({
           model: 'claude-sonnet-4-6',
-          max_tokens: 4096,
-          system: systemPrompt,
-          tools: TOOLS,
+          max_tokens: maxOutputTokens,
+          system: systemBlock,
+          tools: CACHEABLE_TOOLS as Anthropic.Tool[],
           messages: apiMessages,
+        });
+
+        // Track token usage (accumulate across iterations)
+        const usage = response.usage as Anthropic.Usage & {
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
+        const iterPromptTokens = usage.input_tokens ?? 0;
+        const iterCompletionTokens = usage.output_tokens ?? 0;
+        const iterCacheRead = usage.cache_read_input_tokens ?? 0;
+        const iterCacheWrite = usage.cache_creation_input_tokens ?? 0;
+
+        totalPromptTokens += iterPromptTokens;
+        totalCompletionTokens += iterCompletionTokens;
+        totalCacheReadTokens += iterCacheRead;
+        totalCacheWriteTokens += iterCacheWrite;
+        totalTokensUsed += iterPromptTokens + iterCompletionTokens;
+
+        logger.debug('Anthropic response tokens', {
+          iteration: iterations,
+          input: iterPromptTokens,
+          output: iterCompletionTokens,
+          cacheRead: iterCacheRead,
+          cacheWrite: iterCacheWrite,
+          sessionId,
         });
 
         // Append the full assistant response to messages
         apiMessages.push({ role: 'assistant', content: response.content });
 
         if (response.stop_reason === 'end_turn') {
-          // Extract text from content blocks
           for (const block of response.content) {
             if (block.type === 'text') {
               finalText = block.text;
@@ -350,7 +522,6 @@ export class VegaAI {
             });
           }
 
-          // Feed tool results back
           apiMessages.push({ role: 'user', content: toolResults });
           continue;
         }
@@ -368,6 +539,36 @@ export class VegaAI {
         finalText = 'I reached the maximum number of reasoning steps. Please try a more specific question.';
       }
 
+      // ── 6. Record usage ────────────────────────────────────────────────────
+      const estimatedCost = governor.estimateCost(
+        totalPromptTokens,
+        totalCompletionTokens,
+        totalCacheReadTokens,
+        totalCacheWriteTokens,
+      );
+
+      governor.recordUsage({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        endpoint: 'chat',
+        session_id: sessionId,
+        reason: `chat-${mode}-${iterations}iter`,
+        prompt_tokens: totalPromptTokens,
+        completion_tokens: totalCompletionTokens,
+        cache_read_tokens: totalCacheReadTokens,
+        cache_write_tokens: totalCacheWriteTokens,
+        total_tokens: totalPromptTokens + totalCompletionTokens,
+        estimated_cost_usd: estimatedCost,
+        cache_hit: false,
+        blocked_by_budget: false,
+      });
+
+      // Cache the response for future identical requests
+      if (finalText) {
+        governor.setCachedResponse(promptHash, finalText);
+      }
+
+      // ── 7. Update history ──────────────────────────────────────────────────
       const assistantMsg: ChatMessage = {
         id: uuidv4(),
         role: 'assistant',
@@ -600,7 +801,6 @@ export class VegaAI {
   private extractSuggestions(response: string, context?: TradingContext): string[] {
     const suggestions: string[] = [];
 
-    // Context-driven suggestions
     if (context) {
       if (context.predictions.length > 0) {
         const top = context.predictions[0];
@@ -618,7 +818,6 @@ export class VegaAI {
       }
     }
 
-    // Pattern-based suggestions from response text
     if (/incident|outage|error|fail/i.test(response)) {
       suggestions.push('Show me all open incidents');
     }
@@ -634,6 +833,10 @@ export class VegaAI {
 
   isConfigured(): boolean {
     return !!config.anthropicApiKey;
+  }
+
+  getCostGovernor(): CostGovernor {
+    return this.costGovernor;
   }
 }
 

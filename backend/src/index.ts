@@ -8,18 +8,25 @@ import logger from './logger';
 import { OperationalContextStore } from './services/operationalContext';
 import { VegaSSMClient } from './services/ssmClient';
 import { VegaAI } from './services/ai';
+import { CostGovernor } from './services/costGovernor';
 import { init as initVega } from './services/vegaInstance';
 import healthRouter from './routes/health';
 import contextRouter from './routes/context';
 import chatRouter from './routes/chat';
 import commandRouter from './routes/command';
+import costRouter from './routes/cost';
 
 // ─── Initialize VEGA AI with its dependencies ────────────────────────────────
 const opCtx = new OperationalContextStore(
   process.env.OPERATIONAL_DB_PATH ?? './data/operational.db',
 );
+
+// CostGovernor shares the same SQLite DB instance as OperationalContextStore.
+// Access the underlying db via the exposed getter.
+const costGovernor = new CostGovernor(opCtx.getDb());
+
 const ssmClient = new VegaSSMClient();
-initVega(new VegaAI(opCtx, ssmClient));
+initVega(new VegaAI(opCtx, ssmClient, costGovernor));
 logger.info('VEGA AI initialized', { mode: config.mode });
 
 const app = express();
@@ -59,6 +66,7 @@ app.use('/api/ai/health', healthRouter);
 app.use('/api/ai/context', contextRouter);
 app.use('/api/ai/chat', chatLimiter, chatRouter);
 app.use('/api/ai/command', commandLimiter, commandRouter);
+app.use('/api/ai/cost', costRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'not_found', message: 'Endpoint not found' });

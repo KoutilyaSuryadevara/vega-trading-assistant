@@ -331,6 +331,12 @@ export class OperationalContextStore {
     `).run(key, value, now);
   }
 
+  // ── DB access (for sharing with CostGovernor) ─────────────────────────────
+
+  getDb(): Database.Database {
+    return this.db;
+  }
+
   // ── Full Context ───────────────────────────────────────────────────────────
 
   getFullContext(): {
