@@ -5,7 +5,7 @@ import { tradingClient } from '../services/trading-client';
 import { logEvent } from '../services/audit';
 import { config } from '../config';
 import logger from '../logger';
-import type { ChatRequest, TradingContext } from '../../../shared/types';
+import type { ChatRequest, TradingContext } from '../types';
 
 const router = Router();
 

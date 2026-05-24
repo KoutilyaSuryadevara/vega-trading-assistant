@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { tradingClient } from '../services/trading-client';
 import logger from '../logger';
-import type { TradingContext } from '../../../shared/types';
+import type { TradingContext } from '../types';
 
 const router = Router();
 

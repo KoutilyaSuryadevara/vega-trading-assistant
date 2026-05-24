@@ -4,7 +4,7 @@ import { tradingClient } from '../services/trading-client';
 import { logEvent } from '../services/audit';
 import { config } from '../config';
 import logger from '../logger';
-import type { CommandRequest, CommandType } from '../../../shared/types';
+import type { CommandRequest, CommandType } from '../types';
 
 const router = Router();
 

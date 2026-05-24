@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import type { AssistantMode } from '../../shared/types';
+import type { AssistantMode } from './types';
 
 dotenv.config();
 

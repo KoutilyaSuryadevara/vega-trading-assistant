@@ -4,7 +4,7 @@ import { dirname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config';
 import logger from '../logger';
-import type { AuditEntry } from '../../../shared/types';
+import type { AuditEntry } from '../types';
 
 let db: Database.Database | null = null;
 

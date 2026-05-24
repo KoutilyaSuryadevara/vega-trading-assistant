@@ -5,7 +5,7 @@ import logger from '../logger';
 import type {
   ChatMessage, ChatRequest, ChatResponse, TradingCommand,
   TradingContext, AssistantMode, CommandType
-} from '../../../shared/types';
+} from '../types';
 
 const COMMAND_PATTERNS: Array<{ pattern: RegExp; type: CommandType; riskLevel: TradingCommand['riskLevel']; description: string }> = [
   { pattern: /emergency.?stop|halt.?all.?trad/i, type: 'emergency_stop', riskLevel: 'critical', description: 'Emergency stop all trading activity immediately' },

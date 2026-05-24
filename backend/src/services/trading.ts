@@ -2,7 +2,7 @@ import axios, { AxiosInstance } from 'axios';
 import logger from '../logger';
 import type {
   TradingContext, Prediction, Order, TradingStatus, AlpacaStatus, TrainingStatus
-} from '../../../shared/types';
+} from '../types';
 
 function mockContext(): TradingContext {
   const now = new Date().toISOString();

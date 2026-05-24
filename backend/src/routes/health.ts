@@ -3,7 +3,7 @@ import { config } from '../config';
 import { vegaAI } from '../services/ai';
 import { tradingClient } from '../services/trading-client';
 import { isDbHealthy } from '../services/audit';
-import type { HealthResponse } from '../../../shared/types';
+import type { HealthResponse } from '../types';
 
 const router = Router();
 
