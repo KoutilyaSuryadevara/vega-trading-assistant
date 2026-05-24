@@ -5,10 +5,22 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import { config } from './config';
 import logger from './logger';
+import { OperationalContextStore } from './services/operationalContext';
+import { VegaSSMClient } from './services/ssmClient';
+import { VegaAI } from './services/ai';
+import { init as initVega } from './services/vegaInstance';
 import healthRouter from './routes/health';
 import contextRouter from './routes/context';
 import chatRouter from './routes/chat';
 import commandRouter from './routes/command';
+
+// ─── Initialize VEGA AI with its dependencies ────────────────────────────────
+const opCtx = new OperationalContextStore(
+  process.env.OPERATIONAL_DB_PATH ?? './data/operational.db',
+);
+const ssmClient = new VegaSSMClient();
+initVega(new VegaAI(opCtx, ssmClient));
+logger.info('VEGA AI initialized', { mode: config.mode });
 
 const app = express();
 

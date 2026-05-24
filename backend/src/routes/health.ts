@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { config } from '../config';
-import { vegaAI } from '../services/ai';
+import { getInstance as getVegaAI } from '../services/vegaInstance';
 import { tradingClient } from '../services/trading-client';
 import { isDbHealthy } from '../services/audit';
 import type { HealthResponse } from '../types';
@@ -10,7 +10,7 @@ const router = Router();
 router.get('/', async (_req: Request, res: Response) => {
   const tradingApiUp = await tradingClient.checkHealth();
   const dbHealthy = isDbHealthy();
-  const aiConfigured = vegaAI.isConfigured();
+  const aiConfigured = getVegaAI().isConfigured();
 
   const services: HealthResponse['services'] = {
     anthropic: aiConfigured ? 'connected' : 'error',

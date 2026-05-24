@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
+    "@aws-sdk/client-ssm": "^3.967.0",
     "axios": "^1.6.0",
     "better-sqlite3": "^9.4.0",
     "cors": "^2.8.5",

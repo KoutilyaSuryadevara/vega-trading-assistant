@@ -1,29 +1,11 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { vegaAI } from '../services/ai';
-import { tradingClient } from '../services/trading-client';
-import { logEvent } from '../services/audit';
+import { getInstance as getVegaAI } from '../services/vegaInstance';
 import { config } from '../config';
 import logger from '../logger';
-import type { ChatRequest, TradingContext } from '../types';
+import type { ChatRequest } from '../types';
 
 const router = Router();
-
-let contextCache: TradingContext | null = null;
-let contextCacheTime = 0;
-const CACHE_TTL = 30_000;
-
-async function getCachedContext(): Promise<TradingContext> {
-  const now = Date.now();
-  if (contextCache && now - contextCacheTime < CACHE_TTL) return contextCache;
-  try {
-    contextCache = await tradingClient.getContext();
-    contextCacheTime = now;
-  } catch {
-    if (!contextCache) throw new Error('Trading context unavailable');
-  }
-  return contextCache!;
-}
 
 router.post('/', async (req: Request, res: Response) => {
   const body = req.body as Partial<ChatRequest>;
@@ -40,35 +22,21 @@ router.post('/', async (req: Request, res: Response) => {
 
   const sessionId = body.sessionId ?? uuidv4();
   const mode = config.mode;
-  const ipAddress = req.ip ?? 'unknown';
 
   try {
-    const context = await getCachedContext();
-    const response = await vegaAI.chat({ message: body.message, sessionId, mode }, context);
-
-    // Strip pendingAction in readonly mode — it cannot be executed
-    if (mode === 'readonly' && response.pendingAction) {
-      response.pendingAction = undefined;
-      response.requiresApproval = false;
-      if (!response.message.includes('readonly')) {
-        response.message += '\n\n*Note: Command execution is disabled in readonly mode. Switch to approval_required mode to execute commands.*';
-      }
-    }
-
-    logEvent({
-      sessionId,
-      timestamp: new Date().toISOString(),
-      eventType: 'chat',
-      input: body.message,
-      output: response.message,
-      mode,
-      ipAddress,
-    });
-
+    const vegaAI = getVegaAI();
+    const response = await vegaAI.chat(body.message, sessionId, mode);
     res.json(response);
   } catch (err) {
-    logger.error('Chat error', { error: (err as Error).message, sessionId });
-    res.status(500).json({ error: 'ai_error', message: (err as Error).message });
+    const msg = (err as Error).message ?? 'Unknown error';
+    logger.error('Chat error', { error: msg, sessionId });
+
+    // Surface user-friendly error without leaking internals
+    const isUserFacing = msg.includes('temporarily unavailable') || msg.includes('mode');
+    res.status(500).json({
+      error: 'ai_error',
+      message: isUserFacing ? msg : 'AI service temporarily unavailable. Please try again.',
+    });
   }
 });
 
