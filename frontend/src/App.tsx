@@ -4,6 +4,7 @@ import { ChatInterface } from './components/ChatInterface';
 import { StatusCards } from './components/StatusCards';
 import { PredictionsPanel } from './components/PredictionsPanel';
 import { CommandHistory } from './components/CommandHistory';
+import { CostDashboard } from './components/CostDashboard';
 import { TradeApproval } from './components/TradeApproval';
 import { VegaOrb } from './components/VegaOrb';
 import { api } from './services/api';
@@ -463,6 +464,9 @@ export default function App() {
               loading={state.contextLoading}
             />
             <CommandHistory commands={state.commandHistory} />
+            <div style={{ marginTop: 8 }}>
+              <CostDashboard apiUrl={import.meta.env.VITE_API_URL as string ?? 'http://localhost:3001'} />
+            </div>
           </div>
         </div>
 

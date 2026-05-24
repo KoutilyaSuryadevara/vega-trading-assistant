@@ -43,4 +43,13 @@ export const config = {
   auditDbPath: process.env.AUDIT_DB_PATH ?? './data/audit.db',
   nodeEnv: process.env.NODE_ENV ?? 'development',
   version: '1.0.0',
+
+  // ── Claude cost-control config ────────────────────────────────────────────
+  claudeDailyBudgetUsd: parseFloat(process.env.CLAUDE_DAILY_BUDGET_USD ?? '5'),
+  claudeMonthlyBudgetUsd: parseFloat(process.env.CLAUDE_MONTHLY_BUDGET_USD ?? '100'),
+  claudeMaxCallsPerHour: parseInt(process.env.CLAUDE_MAX_CALLS_PER_HOUR ?? '20', 10),
+  claudeMaxTokensPerRequest: parseInt(process.env.CLAUDE_MAX_TOKENS_PER_REQUEST ?? '4000', 10),
+  claudeMaxOutputTokens: parseInt(process.env.CLAUDE_MAX_OUTPUT_TOKENS ?? '800', 10),
+  claudeEnabled: process.env.CLAUDE_ENABLED !== 'false',
+  claudeCacheTtlSeconds: parseInt(process.env.CLAUDE_CACHE_TTL_SECONDS ?? '3600', 10),
 } as const;
