@@ -359,10 +359,26 @@ export function ChatInterface({ messages, onSend, loading, error, suggestions, v
       {error && (
         <div style={{
           padding: '10px 16px', background: '#2d0b0b', borderBottom: '1px solid #f85149',
-          color: '#f85149', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center',
+          color: '#f85149', fontSize: 13,
         }}>
-          <span>✗</span>
-          <span>{error}</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ flexShrink: 0 }}>⚠</span>
+            <span style={{ flex: 1 }}>{error}</span>
+          </div>
+          {error.includes('console.anthropic.com') && (
+            <a
+              href="https://console.anthropic.com/settings/billing"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: 'inline-block', marginTop: 8, marginLeft: 22,
+                padding: '5px 14px', background: '#f85149', color: '#fff',
+                borderRadius: 6, textDecoration: 'none', fontSize: 12, fontWeight: 600,
+              }}
+            >
+              → Open Anthropic Billing Console
+            </a>
+          )}
         </div>
       )}
 

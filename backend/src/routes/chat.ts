@@ -31,8 +31,15 @@ router.post('/', async (req: Request, res: Response) => {
     const msg = (err as Error).message ?? 'Unknown error';
     logger.error('Chat error', { error: msg, sessionId });
 
-    // Surface user-friendly error without leaking internals
-    const isUserFacing = msg.includes('temporarily unavailable') || msg.includes('mode');
+    // Detect billing / quota errors and surface actionable message
+    if (msg.includes('credit balance') || msg.includes('billing') || msg.includes('quota')) {
+      return res.status(402).json({
+        error: 'billing_required',
+        message: '⚠ Anthropic API credits required. Go to console.anthropic.com → Settings → Billing and add credits to activate VEGA.',
+      });
+    }
+
+    const isUserFacing = msg.includes('temporarily unavailable') || msg.includes('mode') || msg.includes('readonly');
     res.status(500).json({
       error: 'ai_error',
       message: isUserFacing ? msg : 'AI service temporarily unavailable. Please try again.',

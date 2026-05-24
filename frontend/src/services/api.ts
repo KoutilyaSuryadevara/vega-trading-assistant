@@ -15,6 +15,7 @@ client.interceptors.response.use(
   (err: AxiosError<{ message?: string; error?: string }>) => {
     const msg = err.response?.data?.message ?? err.response?.data?.error ?? err.message ?? 'Network error';
     const status = err.response?.status;
+    if (status === 402) throw new Error(msg); // billing — show the exact message with link
     if (status === 429) throw new Error('Rate limit reached. Please wait a moment before sending another message.');
     if (status === 403) throw new Error('Action not permitted in current mode.');
     if (status === 503) throw new Error('Trading bot API is currently unreachable.');
